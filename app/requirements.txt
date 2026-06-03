@@ -1,0 +1,10 @@
+neo4j
+python-dotenv
+lxml
+pandas
+google-genai
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
+orjson
