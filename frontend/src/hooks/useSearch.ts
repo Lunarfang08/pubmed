@@ -1,5 +1,7 @@
 import { useMutation } from '@tanstack/react-query'
 
+const API_BASE = import.meta.env.VITE_API_URL || ''
+
 interface SearchResponse {
   summary: string
   papers: Array<{
@@ -16,7 +18,7 @@ interface SearchResponse {
 export function useSearch() {
   return useMutation<SearchResponse, Error, string>({
     mutationFn: async (query: string) => {
-      const response = await fetch('/api/search', {
+      const response = await fetch(`${API_BASE}/api/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query, limit: 10, threshold: 0.80 }),
@@ -30,11 +32,11 @@ export function useSearch() {
 }
 
 export async function fetchGraphData(): Promise<SearchResponse['graph_data']> {
-  const res = await fetch('/api/graph')
+  const res = await fetch(`${API_BASE}/api/graph`)
   return res.json()
 }
 
 export async function fetchGraphStats() {
-  const res = await fetch('/api/graph/stats')
+  const res = await fetch(`${API_BASE}/api/graph/stats`)
   return res.json()
 }

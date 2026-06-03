@@ -4,6 +4,7 @@ FastAPI backend for MedGraph - Medical Literature Search & Knowledge Graph
 
 import asyncio
 import hashlib
+import os
 import time
 from collections import OrderedDict
 from fastapi import FastAPI, HTTPException
@@ -25,7 +26,12 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:5173",
+        os.getenv("VERCEL_URL", ""),
+        "https://pubmed-black.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
