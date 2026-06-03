@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import os
 import time
+import traceback
 from collections import OrderedDict
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,8 +15,8 @@ from pydantic import BaseModel
 from typing import List, Optional
 import logging
 
-from app.pipeline import hybrid_pipeline, db
-from app.llm_layer import generate_embedding
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="MedGraph API",
@@ -26,19 +27,11 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:5173",
-        os.getenv("VERCEL_URL", ""),
-        "https://pubmed-black.vercel.app",
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 _cache: OrderedDict[str, tuple[float, dict]] = OrderedDict()
 CACHE_TTL = 300
@@ -79,6 +72,13 @@ class SearchResponse(BaseModel):
 
 @app.get("/health", tags=["System"])
 async def health_check():
+    # Quick env check
+    missing = []
+    for var in ["NEO4J_URI", "NEO4J_USER", "NEO4J_PASSWORD", "GEMINI_API_KEY"]:
+        if not os.getenv(var):
+            missing.append(var)
+    if missing:
+        return {"status": "warning", "missing_env_vars": missing}
     return {"status": "healthy", "service": "MedGraph API", "version": "2.0.0"}
 
 
@@ -93,12 +93,18 @@ async def search_medical_literature(request: SearchRequest):
             logger.info("Returning cached result")
             return cached
 
+        # Lazy imports — only load heavy deps when actually needed
+        from app.pipeline import hybrid_pipeline
+        from app.neo4j_db import Neo4jDB
+
         summary, papers = await asyncio.to_thread(hybrid_pipeline, request.query)
 
+        db = Neo4jDB()
         graph_data = await asyncio.to_thread(
             db.get_subgraph_for_papers,
             [p.get("title", "") for p in papers],
         )
+        db.close()
 
         logger.info(f"Search completed. Found {len(papers)} papers")
 
@@ -111,71 +117,76 @@ async def search_medical_literature(request: SearchRequest):
         return result
 
     except Exception as e:
-        logger.error(f"Search error: {str(e)}")
+        tb = traceback.format_exc()
+        logger.error(f"Search error: {str(e)}\n{tb}")
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 
 @app.get("/api/papers", tags=["Papers"])
 async def get_all_papers():
     try:
+        from app.neo4j_db import Neo4jDB
+        db = Neo4jDB()
         papers = await asyncio.to_thread(db.get_all_papers)
+        db.close()
         return {"papers": papers, "total": len(papers)}
     except Exception as e:
         logger.error(f"Error fetching papers: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to fetch papers")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch papers: {str(e)}")
 
 
 @app.get("/api/graph", tags=["Graph"])
 async def get_full_graph():
     try:
+        from app.neo4j_db import Neo4jDB
+        db = Neo4jDB()
         graph_data = await asyncio.to_thread(db.get_full_graph)
+        db.close()
         return graph_data
     except Exception as e:
         logger.error(f"Graph error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to fetch graph")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch graph: {str(e)}")
 
 
 @app.post("/api/graph/subgraph", tags=["Graph"])
 async def get_subgraph(papers: List[str]):
     try:
+        from app.neo4j_db import Neo4jDB
+        db = Neo4jDB()
         subgraph = await asyncio.to_thread(db.get_subgraph_for_papers, papers)
+        db.close()
         return subgraph
     except Exception as e:
         logger.error(f"Subgraph error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to fetch subgraph")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch subgraph: {str(e)}")
 
 
 @app.get("/api/graph/stats", tags=["Graph"])
 async def get_graph_statistics():
     try:
+        from app.neo4j_db import Neo4jDB
+        db = Neo4jDB()
         stats = await asyncio.to_thread(db.get_graph_statistics)
+        db.close()
         return stats
     except Exception as e:
         logger.error(f"Stats error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to fetch statistics")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch statistics: {str(e)}")
 
 
 @app.post("/api/semantic-search", tags=["Search"])
 async def semantic_search(query: str, limit: int = 10, threshold: float = 0.80):
     try:
+        from app.llm_layer import generate_embedding
+        from app.neo4j_db import Neo4jDB
         query_embedding = await asyncio.to_thread(generate_embedding, query)
+        db = Neo4jDB()
         results = await asyncio.to_thread(db.search_local, query_embedding, limit, threshold)
+        db.close()
         return {"query": query, "results": results, "count": len(results)}
     except Exception as e:
         logger.error(f"Semantic search error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Search failed")
-
-
-@app.on_event("startup")
-async def startup_event():
-    logger.info("MedGraph API starting up...")
-    logger.info("Database connection established")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info("MedGraph API shutting down...")
-    db.close()
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 
 @app.get("/", tags=["Root"])

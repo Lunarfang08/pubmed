@@ -22,7 +22,12 @@ export function useSearch() {
         body: JSON.stringify({ query, limit: 10, threshold: 0.80 }),
       })
       if (!response.ok) {
-        throw new Error(`Search failed: ${response.statusText}`)
+        let detail = response.statusText
+        try {
+          const err = await response.json()
+          detail = err.detail || detail
+        } catch { /* use statusText */ }
+        throw new Error(`Search failed: ${detail}`)
       }
       return response.json()
     },
